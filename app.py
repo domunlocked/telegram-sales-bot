@@ -90,9 +90,12 @@ def dashboard():
 # ======================
 @app.route(f"/{TOKEN}", methods=["POST"])
 def telegram_webhook():
-    update = Update.de_json(request.get_json(force=True), bot)
+    data = request.get_json(force=True)
+    print("📩 Incoming update:", data, flush=True)   # debug log
+    update = Update.de_json(data, bot)
     app_telegram.update_queue.put_nowait(update)
     return "OK", 200
+
 
 
 # ======================
