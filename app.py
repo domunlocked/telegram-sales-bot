@@ -1,112 +1,114 @@
 import os
 import json
-from flask import Flask, request, render_template_string, redirect, url_for
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters
-import datetime
+from flask import Flask, request, render_template_string
+from telegram import Update, Bot
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# Load token from environment variable
-TOKEN = os.getenv("TELEGRAM_TOKEN")
+# ======================
+# Configuration
+# ======================
+TOKEN = os.getenv("BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")  # set in Render
+bot = Bot(token=TOKEN)
 
-# Flask app
 app = Flask(__name__)
 
-# Telegram app
-application = Application.builder().token(TOKEN).build()
-
-# JSON storage
+# JSON file to store sales
 SALES_FILE = "sales.json"
 if not os.path.exists(SALES_FILE):
     with open(SALES_FILE, "w") as f:
         json.dump([], f)
 
 
-# ---------------- Telegram Commands ----------------
-async def start(update: Update, context):
-    await update.message.reply_text("🤖 Hello! Send me sales like: Apple 5000")
+# ======================
+# Telegram Handlers
+# ======================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Welcome! Send me your sales data in format: item, amount")
 
 
-async def add_sale(update: Update, context):
-    text = update.message.text.strip()
-    parts = text.rsplit(" ", 1)
-    if len(parts) == 2 and parts[1].isdigit():
-        item, price = parts
-        price = int(parts[1])
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    try:
+        item, amount = text.split(",")
+        sale = {"item": item.strip(), "amount": float(amount.strip()), "time": update.message.date.isoformat()}
 
-        sale = {
-            "item": item,
-            "price": price,
-            "currency": "៛",
-            "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        }
+        # Save to file
+        with open(SALES_FILE, "r") as f:
+            sales = json.load(f)
+        sales.append(sale)
+        with open(SALES_FILE, "w") as f:
+            json.dump(sales, f)
 
-        with open(SALES_FILE, "r+") as f:
-            data = json.load(f)
-            data.append(sale)
-            f.seek(0)
-            json.dump(data, f, indent=2)
-
-        await update.message.reply_text(f"✅ Added sale: {item} {price:,} ៛")
-    else:
-        await update.message.reply_text("❌ Format: ItemName 5000")
+        await update.message.reply_text(f"✅ Recorded sale: {sale['item']} - {sale['amount']}")
+    except Exception:
+        await update.message.reply_text("❌ Invalid format. Use: item, amount")
 
 
-application.add_handler(CommandHandler("start", start))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, add_sale))
-
-
-# ---------------- Flask Routes ----------------
-@app.route(f"/{TOKEN}", methods=["POST"])
-def webhook():
-    update = Update.de_json(request.get_json(force=True), application.bot)
-    application.update_queue.put_nowait(update)
-    return "ok"
-
-
+# ======================
+# Flask Dashboard
+# ======================
 @app.route("/")
 def dashboard():
-    with open(SALES_FILE) as f:
+    with open(SALES_FILE, "r") as f:
         sales = json.load(f)
 
-    total = sum(s["price"] for s in sales)
+    total = sum(s["amount"] for s in sales)
 
     html = """
-    <h1>📊 Sales Dashboard</h1>
-    <form method="post" action="/add">
-        <input name="item" placeholder="Item" required>
-        <input name="price" type="number" placeholder="Price (៛)" required>
-        <button type="submit">Add Sale</button>
-    </form>
-    <h2>Total: {{ total:, }} ៛</h2>
-    <ul>
-        {% for s in sales %}
-            <li>{{ s["time"] }} - {{ s["item"] }} - {{ s["price"]:, }} ៛</li>
-        {% endfor %}
-    </ul>
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Sales Dashboard</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 20px; }
+            table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+            th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+            th { background-color: #f4f4f4; }
+        </style>
+    </head>
+    <body>
+        <h1>Sales Dashboard</h1>
+        <h2>Total Sales: {{ total }}</h2>
+        <table>
+            <tr><th>Item</th><th>Amount</th><th>Time</th></tr>
+            {% for sale in sales %}
+            <tr>
+                <td>{{ sale["item"] }}</td>
+                <td>{{ sale["amount"] }}</td>
+                <td>{{ sale["time"] }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+    </body>
+    </html>
     """
     return render_template_string(html, sales=sales, total=total)
 
 
-@app.route("/add", methods=["POST"])
-def add_sale_form():
-    item = request.form["item"]
-    price = int(request.form["price"])
-    sale = {
-        "item": item,
-        "price": price,
-        "currency": "៛",
-        "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-    }
+# ======================
+# Telegram Webhook
+# ======================
+@app.route(f"/{TOKEN}", methods=["POST"])
+def telegram_webhook():
+    update = Update.de_json(request.get_json(force=True), bot)
+    app_telegram.update_queue.put_nowait(update)
+    return "OK", 200
 
-    with open(SALES_FILE, "r+") as f:
-        data = json.load(f)
-        data.append(sale)
-        f.seek(0)
-        json.dump(data, f, indent=2)
 
-    return redirect(url_for("dashboard"))
+# ======================
+# Run Telegram + Flask
+# ======================
+def main():
+    global app_telegram
+    app_telegram = Application.builder().token(TOKEN).build()
+
+    app_telegram.add_handler(CommandHandler("start", start))
+    app_telegram.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    # Start polling in background
+    app_telegram.run_polling(stop_signals=None)
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    main()
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
