@@ -1,2 +1,5 @@
 flask
-python-telegram-bot==20.3
+python-telegram-bot
+gunicorn
+pandas
+openpyxl
